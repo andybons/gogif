@@ -179,7 +179,8 @@ func (q *MedianCutQuantizer) Quantize(m image.Image, numColor int) (*image.Palet
 		longestBlock := heap.Pop(pq).(*block)
 		points := longestBlock.points
 
-		// selection-sort would be much more efficient than a full-sort, here.
+		// Instead of sorting the entire slice, finding the median using an algorithm
+		// like introselect would give much better performance. Do before submission.
 		func(li int) {
 			By(func(p1, p2 *point) bool { return p1.x[li] < p2.x[li] }).Sort(points)
 		}(longestBlock.longestSideIndex())
@@ -192,8 +193,9 @@ func (q *MedianCutQuantizer) Quantize(m image.Image, numColor int) (*image.Palet
 		heap.Push(pq, block2)
 	}
 
-	results := make([]point, numColor)
-	for n := 0; pq.Len() > 0; n++ {
+	palette := make(color.Palette, numColor)
+	var n int
+	for n = 0; pq.Len() > 0; n++ {
 		block := heap.Pop(pq).(*block)
 		sum := make([]int, numDimensions)
 		for i := 0; i < len(block.points); i++ {
@@ -205,18 +207,17 @@ func (q *MedianCutQuantizer) Quantize(m image.Image, numColor int) (*image.Palet
 		for j := 0; j < numDimensions; j++ {
 			avgPoint.x[j] = sum[j] / len(block.points)
 		}
-		results[n] = avgPoint
-	}
-	palette := make(color.Palette, len(results))
-	for i, r := range results {
-		palette[i] = color.RGBA64{
-			R: uint16(r.x[0]),
-			G: uint16(r.x[1]),
-			B: uint16(r.x[2]),
+		palette[n] = color.RGBA64{
+			R: uint16(avgPoint.x[0]),
+			G: uint16(avgPoint.x[1]),
+			B: uint16(avgPoint.x[2]),
 			A: 0xFFFF,
 		}
-		fmt.Printf("[%d,%d,%d],\n", r.x[0]>>8, r.x[1]>>8, r.x[2]>>8)
 	}
+	// Possibly trim to only the colors present in the image, which
+	// could be less than numColor.
+	palette = palette[:n]
+
 	pm := image.NewPaletted(m.Bounds(), palette)
 	pm.Stride = m.Bounds().Dy()
 	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
