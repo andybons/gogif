@@ -5,8 +5,9 @@ import (
 	"fmt"
 	"image"
 	"image/color"
-	_ "image/jpeg"
-	"image/png"
+	_ "image/gif"
+	"image/jpeg"
+	_ "image/png"
 	"log"
 	"net/http"
 	"os"
@@ -212,17 +213,17 @@ func (q *MedianCutQuantizer) Quantize(m image.Image, numColor int) (*image.Palet
 			R: uint16(r.x[0]),
 			G: uint16(r.x[1]),
 			B: uint16(r.x[2]),
+			A: 0xFFFF,
 		}
 		fmt.Printf("[%d,%d,%d],\n", r.x[0]>>8, r.x[1]>>8, r.x[2]>>8)
 	}
 	pm := image.NewPaletted(m.Bounds(), palette)
-	pm.Stride = 3 * m.Bounds().Dy()
+	pm.Stride = m.Bounds().Dy()
 	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
 		for x := bounds.Min.X; x < bounds.Max.X; x++ {
 			pm.Set(x, y, m.At(x, y))
 		}
 	}
-	fmt.Println(pm.Pix)
 
 	return pm, nil
 }
@@ -238,8 +239,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("image.Decode: %q\n", err)
 	}
+
 	q := MedianCutQuantizer{}
-	pImage, _ = q.Quantize(m, 16)
+	pImage, _ = q.Quantize(m, 256)
 
 	http.HandleFunc("/", handleIndex)
 	fmt.Println("Serving on http://locahost:8080")
@@ -250,5 +252,5 @@ var pImage *image.Paletted
 
 func handleIndex(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Content-Type", "image/png")
-	png.Encode(w, pImage)
+	jpeg.Encode(w, pImage, nil)
 }
