@@ -43,7 +43,7 @@ type block struct {
 	index int // The index of the item in the heap.
 }
 
-func NewBlock(p []point) *block {
+func newBlock(p []point) *block {
 	b := &block{points: p}
 	for i := 0; i < numDimensions; i++ {
 		b.minCorner.x[i] = 0
@@ -106,12 +106,11 @@ func (ps *pointSorter) Swap(i, j int) {
 	ps.points[i], ps.points[j] = ps.points[j], ps.points[i]
 }
 
-// Less is part of sort.Interface. It is implemented by calling the "by" closure in the sorter.
 func (ps *pointSorter) Less(i, j int) bool {
 	return ps.by(&ps.points[i], &ps.points[j])
 }
 
-// A PriorityQueue implements heap.Interface and holds Blocks.
+// A PriorityQueue implements heap.Interface and holds blocks.
 type PriorityQueue []*block
 
 func (pq PriorityQueue) Len() int { return len(pq) }
@@ -169,7 +168,7 @@ func (q *MedianCutQuantizer) Quantize(m image.Image, numColor int) (*image.Palet
 			i++
 		}
 	}
-	initialBlock := NewBlock(points)
+	initialBlock := newBlock(points)
 	initialBlock.shrink()
 	pq := &PriorityQueue{}
 	heap.Init(pq)
@@ -185,8 +184,8 @@ func (q *MedianCutQuantizer) Quantize(m image.Image, numColor int) (*image.Palet
 			By(func(p1, p2 *point) bool { return p1.x[li] < p2.x[li] }).Sort(points)
 		}(longestBlock.longestSideIndex())
 		median := len(points) / 2
-		block1 := NewBlock(points[0:median])
-		block2 := NewBlock(points[median:])
+		block1 := newBlock(points[0:median])
+		block2 := newBlock(points[median:])
 		block1.shrink()
 		block2.shrink()
 		heap.Push(pq, block1)
