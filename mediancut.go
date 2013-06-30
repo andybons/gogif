@@ -5,9 +5,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
-	_ "image/gif"
 	"image/jpeg"
-	_ "image/png"
 	"log"
 	"net/http"
 	"os"
@@ -18,14 +16,14 @@ const (
 	numDimensions = 3
 )
 
-func min(x, y int) int {
+func min(x, y uint32) uint32 {
 	if x < y {
 		return x
 	}
 	return y
 }
 
-func max(x, y int) int {
+func max(x, y uint32) uint32 {
 	if x > y {
 		return x
 	}
@@ -33,7 +31,7 @@ func max(x, y int) int {
 }
 
 type point struct {
-	x [numDimensions]int
+	x [numDimensions]uint32
 }
 
 type block struct {
@@ -65,7 +63,7 @@ func (b *block) longestSideIndex() int {
 	return maxIndex
 }
 
-func (b *block) longestSideLength() int {
+func (b *block) longestSideLength() uint32 {
 	i := b.longestSideIndex()
 	return b.maxCorner.x[i] - b.minCorner.x[i]
 }
@@ -150,7 +148,7 @@ func (pq *PriorityQueue) Top() interface{} {
 }
 
 type Quantizer interface {
-	Quantize(m image.Image, numColor int) (image.PalettedImage, error)
+	Quantize(m image.Image, numColor int) (*image.Paletted, error)
 }
 
 type MedianCutQuantizer struct{}
@@ -162,9 +160,9 @@ func (q *MedianCutQuantizer) Quantize(m image.Image, numColor int) (*image.Palet
 	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
 		for x := bounds.Min.X; x < bounds.Max.X; x++ {
 			r, g, b, _ := m.At(x, y).RGBA()
-			points[i].x[0] = int(r)
-			points[i].x[1] = int(g)
-			points[i].x[2] = int(b)
+			points[i].x[0] = r
+			points[i].x[1] = g
+			points[i].x[2] = b
 			i++
 		}
 	}
@@ -196,7 +194,7 @@ func (q *MedianCutQuantizer) Quantize(m image.Image, numColor int) (*image.Palet
 	var n int
 	for n = 0; pq.Len() > 0; n++ {
 		block := heap.Pop(pq).(*block)
-		sum := make([]int, numDimensions)
+		sum := make([]uint32, numDimensions)
 		for i := 0; i < len(block.points); i++ {
 			for j := 0; j < numDimensions; j++ {
 				sum[j] += block.points[i].x[j]
@@ -204,7 +202,7 @@ func (q *MedianCutQuantizer) Quantize(m image.Image, numColor int) (*image.Palet
 		}
 		var avgPoint point
 		for j := 0; j < numDimensions; j++ {
-			avgPoint.x[j] = sum[j] / len(block.points)
+			avgPoint.x[j] = sum[j] / uint32(len(block.points))
 		}
 		palette[n] = color.RGBA64{
 			R: uint16(avgPoint.x[0]),
@@ -213,7 +211,7 @@ func (q *MedianCutQuantizer) Quantize(m image.Image, numColor int) (*image.Palet
 			A: 0xFFFF,
 		}
 	}
-	// Possibly trim to only the colors present in the image, which
+	// Trim to only the colors present in the image, which
 	// could be less than numColor.
 	palette = palette[:n]
 
@@ -244,7 +242,7 @@ func main() {
 	pImage, _ = q.Quantize(m, 256)
 
 	http.HandleFunc("/", handleIndex)
-	fmt.Println("Serving on http://locahost:8080")
+	fmt.Println("Serving result image at http://locahost:8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
