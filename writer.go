@@ -31,6 +31,19 @@ const (
 
 ////// END OF ALREADY EXISTENT STUFF.
 
+const (
+	resolution = 8
+)
+
+func log2Int256(x int) int {
+	for i, v := range [8]int{2, 4, 8, 16, 32, 64, 128, 256} {
+		if x <= v {
+			return i
+		}
+	}
+	return -1
+}
+
 // Little-endian.
 func writeUint16(b []byte, u uint16) {
 	b[0] = byte(u)
@@ -85,19 +98,41 @@ func Encode(w io.Writer, m image.Image, o *Options) error {
 
 	//  0      3 bytes  "GIF"
 	//  3      3 bytes  "87a" or "89a"
-	//  6      2 bytes  <Logical Screen Width>
-	//  8      2 bytes  <Logical Screen Height>
-	// 10      1 byte   bit 0:    Global Color Table Flag (GCTF)
-	//                  bit 1..3: Color Resolution
-	//                  bit 4:    Sort Flag to Global Color Table
-	//                  bit 5..7: Size of Global Color Table: 2^(1+n)
 	if _, e.err = io.WriteString(e.w, "GIF87a"); e.err != nil {
 		return e.err
 	}
+	//  6      2 bytes  <Logical Screen Width>
+	//  8      2 bytes  <Logical Screen Height>
 	// Logical screen width and height.
 	writeUint16(e.buf[:2], uint16(e.m.Bounds().Dx()))
 	writeUint16(e.buf[2:4], uint16(e.m.Bounds().Dy()))
 	e.write(e.buf[:4])
+
+	// 10      1 byte   bit 0:    Global Color Table Flag (GCTF)
+	//                  bit 1..3: Color Resolution
+	//                  bit 4:    Sort Flag to Global Color Table
+	//                  bit 5..7: Size of Global Color Table: 2^(1+n)
+	colorTableSize := uint8(log2Int256(len(e.pm.Palette)) - 1)
+	e.buf[0] = 0x80 | ((resolution - 1) << 4) | colorTableSize
+	// 11      1 byte   <Background Color Index>
+	e.buf[1] = 0x00
+	// 12      1 byte   <Pixel Aspect Ratio>
+	e.buf[2] = 0x00
+	e.write(e.buf[:3])
+	// 13      ? bytes  <Global Color Table(0..255 x 3 bytes) if GCTF is one>
+	// Global Color Table.
+
+	// TODO: Pad the color table based on colorTableSize above.
+	for _, c := range e.pm.Palette {
+		r, g, b, _ := c.RGBA()
+		e.write([]byte{
+			byte(r >> 8),
+			byte(g >> 8),
+			byte(b >> 8),
+		})
+	}
+	//         ? bytes  <Blocks>
+	//         1 bytes  <Trailer> (0x3b)
 
 	// Write End of Image terminator.
 	e.buf[0] = sTrailer
