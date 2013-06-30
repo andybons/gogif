@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	_ "image/gif"
 	"image/jpeg"
 	"log"
 	"net/http"
@@ -153,19 +154,7 @@ type Quantizer interface {
 
 type MedianCutQuantizer struct{}
 
-func (q *MedianCutQuantizer) Quantize(m image.Image, numColor int) (*image.Paletted, error) {
-	bounds := m.Bounds()
-	points := make([]point, bounds.Dx()*bounds.Dy())
-	i := 0
-	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
-		for x := bounds.Min.X; x < bounds.Max.X; x++ {
-			r, g, b, _ := m.At(x, y).RGBA()
-			points[i].x[0] = r
-			points[i].x[1] = g
-			points[i].x[2] = b
-			i++
-		}
-	}
+func (q *MedianCutQuantizer) medianCut(points []point, numColor int) color.Palette {
 	initialBlock := newBlock(points)
 	initialBlock.shrink()
 	pq := &PriorityQueue{}
@@ -213,7 +202,38 @@ func (q *MedianCutQuantizer) Quantize(m image.Image, numColor int) (*image.Palet
 	}
 	// Trim to only the colors present in the image, which
 	// could be less than numColor.
-	palette = palette[:n]
+	return palette[:n]
+}
+
+func (q *MedianCutQuantizer) Quantize(m image.Image, numColor int) (*image.Paletted, error) {
+	bounds := m.Bounds()
+	points := make([]point, bounds.Dx()*bounds.Dy())
+	colorSet := make(map[string]color.Color, numColor)
+	i := 0
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			c := m.At(x, y)
+			r, g, b, _ := c.RGBA()
+			colorSet[fmt.Sprintf("%d,%d,%d", r, g, b)] = c
+			points[i].x[0] = r
+			points[i].x[1] = g
+			points[i].x[2] = b
+			i++
+		}
+	}
+	var palette color.Palette
+	if len(colorSet) <= numColor {
+		// No need to quantize since the total number of colors
+		// fits within the limit.
+		palette = make(color.Palette, len(colorSet))
+		i := 0
+		for _, c := range colorSet {
+			palette[i] = c
+			i++
+		}
+	} else {
+		palette = q.medianCut(points, numColor)
+	}
 
 	pm := image.NewPaletted(m.Bounds(), palette)
 	pm.Stride = m.Bounds().Dy()
@@ -227,7 +247,7 @@ func (q *MedianCutQuantizer) Quantize(m image.Image, numColor int) (*image.Palet
 }
 
 func main() {
-	f, err := os.Open("wow.jpg")
+	f, err := os.Open("sample_1.gif")
 	if err != nil {
 		log.Fatalf("os.Open: %q", err)
 	}
@@ -249,6 +269,6 @@ func main() {
 var pImage *image.Paletted
 
 func handleIndex(w http.ResponseWriter, req *http.Request) {
-	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Content-Type", "image/jpeg")
 	jpeg.Encode(w, pImage, nil)
 }
