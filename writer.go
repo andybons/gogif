@@ -79,12 +79,10 @@ func (b *blockWriter) Write(data []byte) (int, error) {
 	if len(data) == 0 {
 		return 0, nil
 	}
-	log.Println("writing:", len(data))
 	total := 0
 	for total < len(data) {
 		b.slice = b.tmp[1:256]
 		n := copy(b.slice, data[total:])
-		log.Println("Bytes copied:", n)
 		total += n
 		b.tmp[0] = byte(n)
 

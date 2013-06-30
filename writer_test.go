@@ -2,7 +2,7 @@ package main
 
 import (
 	"bytes"
-	"encoding/hex"
+	_ "encoding/hex"
 	"image"
 	"image/gif"
 	"image/png"
@@ -34,9 +34,7 @@ func TestPalettes(t *testing.T) {
 }
 
 func TestWrite(t *testing.T) {
-	m, err := readGif("sample_1.gif")
-	pm := m.(*image.Paletted)
-	t.Log(pm.Palette)
+	m, err := readGif("scape.gif")
 	if err != nil {
 		t.Errorf("readGif: expected no error, but got %q\n", err.Error())
 	}
@@ -60,5 +58,5 @@ func TestWrite2(t *testing.T) {
 		t.Errorf("Encode: expected no error, but got %q\n", err.Error())
 	}
 	ioutil.WriteFile("test2.gif", buf.Bytes(), 0660)
-	t.Log("\n", hex.Dump(buf.Bytes()))
+	//t.Log("\n", hex.Dump(buf.Bytes()))
 }

@@ -7,6 +7,7 @@ import (
 	"image/color"
 	_ "image/gif"
 	"image/jpeg"
+	_ "image/png"
 	"log"
 	"net/http"
 	"os"
@@ -236,7 +237,7 @@ func (q *MedianCutQuantizer) Quantize(m image.Image, numColor int) (*image.Palet
 	}
 
 	pm := image.NewPaletted(m.Bounds(), palette)
-	pm.Stride = m.Bounds().Dy()
+	pm.Stride = m.Bounds().Dx()
 	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
 		for x := bounds.Min.X; x < bounds.Max.X; x++ {
 			pm.Set(x, y, m.At(x, y))
@@ -247,7 +248,7 @@ func (q *MedianCutQuantizer) Quantize(m image.Image, numColor int) (*image.Palet
 }
 
 func main() {
-	f, err := os.Open("sample_1.gif")
+	f, err := os.Open("scape.gif")
 	if err != nil {
 		log.Fatalf("os.Open: %q", err)
 	}
