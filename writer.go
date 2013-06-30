@@ -139,7 +139,7 @@ func Encode(w io.Writer, m image.Image, o *Options) error {
 
 	//  0      3 bytes  "GIF"
 	//  3      3 bytes  "87a" or "89a"
-	if _, e.err = io.WriteString(e.w, "GIF89a"); e.err != nil {
+	if _, e.err = io.WriteString(e.w, "GIF87a"); e.err != nil {
 		return e.err
 	}
 	//  6      2 bytes  <Logical Screen Width>
