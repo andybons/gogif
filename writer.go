@@ -34,6 +34,11 @@ const (
 
 ////// END OF ALREADY EXISTENT STUFF.
 
+const (
+	gcLabel     = 0xF9
+	gcBlockSize = 0x04
+)
+
 var log2Lookup = [8]int{2, 4, 8, 16, 32, 64, 128, 256}
 
 func log2Int256(x int) int {
@@ -58,11 +63,20 @@ type writer interface {
 
 type encoder struct {
 	w            writer
-	m            image.Image
-	pm           *image.Paletted
+	g            *gif.GIF
 	bitsPerPixel int
 	err          error
 	buf          [1024]byte // must be at least 768 so we can write color map
+}
+
+func newEncoder(w io.Writer) *encoder {
+	var e encoder
+	if ww, ok := w.(writer); ok {
+		e.w = ww
+	} else {
+		e.w = bufio.NewWriter(w)
+	}
+	return &e
 }
 
 type blockWriter struct {
@@ -101,72 +115,41 @@ func (e *encoder) write(p []byte) {
 	_, e.err = e.w.Write(p)
 }
 
-// Options are the encoding parameters.
-type Options struct {
-	Quantizer Quantizer
-}
-
-func EncodeAll(w io.Writer, m *gif.GIF, o *Options) error {
-	return nil
-}
-
-// Encode writes the Image m to w in GIF format.
-func Encode(w io.Writer, m image.Image, o *Options) error {
-	// Check for bounds and size restrictions.
-	b := m.Bounds()
-	if b.Dx() >= 1<<16 || b.Dy() >= 1<<16 {
-		return errors.New("gif: image is too large to encode")
-	}
-	var e encoder
-
-	if ww, ok := w.(writer); ok {
-		e.w = ww
-	} else {
-		e.w = bufio.NewWriter(w)
-	}
-	e.m = m
-
-	e.pm, e.err = o.Quantizer.Quantize(m, 256)
+func (e *encoder) writeHeader() {
 	if e.err != nil {
-		return e.err
+		return
+	}
+	// TODO: GIF87a could be valid depending on the features that
+	// the image uses.
+	_, e.err = io.WriteString(e.w, "GIF89a")
+	if e.err != nil {
+		return
 	}
 
-	// GIF87a:
-
-	// GIF Header
-	// Image Block
-	// Trailer
-
-	//  0      3 bytes  "GIF"
-	//  3      3 bytes  "87a" or "89a"
-	if _, e.err = io.WriteString(e.w, "GIF87a"); e.err != nil {
-		return e.err
-	}
-	//  6      2 bytes  <Logical Screen Width>
-	//  8      2 bytes  <Logical Screen Height>
+	// TODO: This bases the global color table on the first image
+	// only.
+	pm := e.g.Image[0]
 	// Logical screen width and height.
-	writeUint16(e.buf[:2], uint16(e.m.Bounds().Dx()))
-	writeUint16(e.buf[2:4], uint16(e.m.Bounds().Dy()))
+	writeUint16(e.buf[:2], uint16(pm.Bounds().Dx()))
+	writeUint16(e.buf[2:4], uint16(pm.Bounds().Dy()))
 	e.write(e.buf[:4])
 
 	// 10      1 byte   bit 0:    Global Color Table Flag (GCTF)
 	//                  bit 1..3: Color Resolution
 	//                  bit 4:    Sort Flag to Global Color Table
 	//                  bit 5..7: Size of Global Color Table: 2^(1+n)
-	log.Println("Len of palette:", len(e.pm.Palette))
-	e.bitsPerPixel = log2Int256(len(e.pm.Palette)) + 1
-	log.Println("Bits per pixel", e.bitsPerPixel)
+	// TODO: Clean this up.
+	e.bitsPerPixel = log2Int256(len(pm.Palette)) + 1
 	e.buf[0] = 0x80 | ((uint8(e.bitsPerPixel) - 1) << 4) | (uint8(e.bitsPerPixel) - 1)
-	// 11      1 byte   <Background Color Index>
-	e.buf[1] = 0x00
-	// 12      1 byte   <Pixel Aspect Ratio>
-	e.buf[2] = 0x00
+	e.buf[1] = 0x00 // Background Color Index.
+	e.buf[2] = 0x00 // Pixel Aspect Ratio.
 	e.write(e.buf[:3])
-	// 13      ? bytes  <Global Color Table(0..255 x 3 bytes) if GCTF is one>
 	// Global Color Table.
 	for i := 0; i < log2Lookup[e.bitsPerPixel-1]; i++ {
-		if i < len(e.pm.Palette) {
-			r, g, b, _ := e.pm.Palette[i].RGBA()
+		if i < len(pm.Palette) {
+			r, g, b, _ := pm.Palette[i].RGBA()
+			// TODO: If the color table is written directly, then
+			// the size of e.buf is superfluously large.
 			e.write([]byte{
 				byte(r >> 8),
 				byte(g >> 8),
@@ -178,53 +161,110 @@ func Encode(w io.Writer, m image.Image, o *Options) error {
 		}
 	}
 
-	// Offset   Length   Contents
-	//   0      1 byte   Image Separator (0x2c)
-	//   1      2 bytes  Image Left Position
-	//   3      2 bytes  Image Top Position
-	//   5      2 bytes  Image Width
-	//   7      2 bytes  Image Height
-	e.buf[0] = sImageDescriptor
-	writeUint16(e.buf[1:3], uint16(e.m.Bounds().Min.X))
-	writeUint16(e.buf[3:5], uint16(e.m.Bounds().Min.Y))
-	writeUint16(e.buf[5:7], uint16(e.m.Bounds().Dx()))
-	writeUint16(e.buf[7:9], uint16(e.m.Bounds().Dy()))
+	// Add animation info if necessary.
+	if len(e.g.Image) > 1 {
+		e.buf[0] = 0x21 // Extention Introducer.
+		e.buf[1] = 0xff // Aplication Label.
+		e.buf[2] = 0x0b // Block Size.
+		e.write(e.buf[:3])
+		_, e.err = io.WriteString(e.w, "NETSCAPE2.0") // Application Identifier.
+		if e.err != nil {
+			return
+		}
+		e.buf[0] = 0x03 // Block Size.
+		e.buf[1] = 0x01 // Sub-block Index.
+		writeUint16(e.buf[2:4], uint16(e.g.LoopCount))
+		e.buf[4] = 0x00 // Block Terminator.
+		e.write(e.buf[:5])
+	}
+}
 
-	//   8      1 byte   bit 0:    Local Color Table Flag (LCTF)
-	//                   bit 1:    Interlace Flag
-	//                   bit 2:    Sort Flag
-	//                   bit 2..3: Reserved
-	//                   bit 4..7: Size of Local Color Table: 2^(1+n)
-	//          ? bytes  Local Color Table(0..255 x 3 bytes) if LCTF is one
-	e.buf[9] = 0x00
+func (e *encoder) writeImageBlock(pm *image.Paletted, delay int) {
+	if e.err != nil {
+		return
+	}
+	log.Println(len(pm.Palette))
+
+	if delay > 0 {
+		e.buf[0] = sExtension  // Extension Introducer.
+		e.buf[1] = gcLabel     // Graphic Control Label.
+		e.buf[2] = gcBlockSize // Block Size.
+		e.buf[3] = 0x00        // TODO: Transparency support.
+
+		writeUint16(e.buf[4:6], uint16(delay)) // Delay Time (1/100ths of a second)
+
+		e.buf[6] = 0x00 // TODO: Transparency support.
+		e.buf[7] = 0x00 // Block Terminator.
+		e.write(e.buf[:8])
+	}
+
+	e.buf[0] = sImageDescriptor
+	writeUint16(e.buf[1:3], uint16(pm.Bounds().Min.X))
+	writeUint16(e.buf[3:5], uint16(pm.Bounds().Min.Y))
+	writeUint16(e.buf[5:7], uint16(pm.Bounds().Dx()))
+	writeUint16(e.buf[7:9], uint16(pm.Bounds().Dy()))
+
+	e.buf[9] = 0x00 // TODO: Local Color Table support.
 	e.write(e.buf[:10])
 
-	//          1 byte   LZW Minimum Code Size
 	litWidth := e.bitsPerPixel
 	if litWidth < 2 {
 		litWidth = 2
 	}
 	e.buf[0] = byte(litWidth)
-	e.write(e.buf[:1])
+	e.write(e.buf[:1]) // LZW Minimum Code Size.
 
-	// [ // Blocks
-	//          1 byte   Block Size (s)
-	//         (s)bytes  Image Data
-	// ]*
 	bw := &blockWriter{w: e.w}
 	lzww := lzw.NewWriter(bw, lzw.LSB, litWidth)
-	if _, err := lzww.Write(e.pm.Pix); err != nil {
-		return err
+	_, e.err = lzww.Write(pm.Pix)
+	if e.err != nil {
+		lzww.Close()
+		return
 	}
 	lzww.Close()
 
-	//          1 byte   Block Terminator(0x00)
-	e.buf[0] = 0x00
+	e.buf[0] = 0x00 // Block Terminator.
 	e.write(e.buf[:1])
+}
 
-	//         1 bytes  <Trailer> (0x3b)
+// Options are the encoding parameters.
+type Options struct {
+	Quantizer Quantizer
+}
+
+func EncodeAll(w io.Writer, g *gif.GIF) error {
+	e := newEncoder(w)
+	e.g = g
+	e.writeHeader()
+	for i, pm := range g.Image {
+		e.writeImageBlock(pm, g.Delay[i])
+	}
 	e.buf[0] = sTrailer
 	e.write(e.buf[:1])
-	log.Println("DONE")
+	return e.err
+}
+
+// Encode writes the Image m to w in GIF format.
+func Encode(w io.Writer, m image.Image, o *Options) error {
+	// Check for bounds and size restrictions.
+	b := m.Bounds()
+	if b.Dx() >= 1<<16 || b.Dy() >= 1<<16 {
+		return errors.New("gif: image is too large to encode")
+	}
+
+	e := newEncoder(w)
+
+	var pm *image.Paletted
+	pm, e.err = o.Quantizer.Quantize(m)
+	if e.err != nil {
+		return e.err
+	}
+	e.g = &gif.GIF{Image: []*image.Paletted{pm}}
+
+	e.writeHeader()
+	e.writeImageBlock(pm, 0)
+
+	e.buf[0] = sTrailer
+	e.write(e.buf[:1])
 	return e.err
 }

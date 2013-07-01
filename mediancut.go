@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
-	_ "image/gif"
+	"image/gif"
 	"image/jpeg"
 	_ "image/png"
 	"log"
@@ -150,19 +150,21 @@ func (pq *PriorityQueue) Top() interface{} {
 }
 
 type Quantizer interface {
-	Quantize(m image.Image, numColor int) (*image.Paletted, error)
+	Quantize(m image.Image) (*image.Paletted, error)
 }
 
-type MedianCutQuantizer struct{}
+type MedianCutQuantizer struct {
+	NumColor int
+}
 
-func (q *MedianCutQuantizer) medianCut(points []point, numColor int) color.Palette {
+func (q *MedianCutQuantizer) medianCut(points []point) color.Palette {
 	initialBlock := newBlock(points)
 	initialBlock.shrink()
 	pq := &PriorityQueue{}
 	heap.Init(pq)
 	heap.Push(pq, initialBlock)
 
-	for pq.Len() < numColor && len(pq.Top().(*block).points) > 1 {
+	for pq.Len() < q.NumColor && len(pq.Top().(*block).points) > 1 {
 		longestBlock := heap.Pop(pq).(*block)
 		points := longestBlock.points
 
@@ -180,7 +182,7 @@ func (q *MedianCutQuantizer) medianCut(points []point, numColor int) color.Palet
 		heap.Push(pq, block2)
 	}
 
-	palette := make(color.Palette, numColor)
+	palette := make(color.Palette, q.NumColor)
 	var n int
 	for n = 0; pq.Len() > 0; n++ {
 		block := heap.Pop(pq).(*block)
@@ -202,14 +204,14 @@ func (q *MedianCutQuantizer) medianCut(points []point, numColor int) color.Palet
 		}
 	}
 	// Trim to only the colors present in the image, which
-	// could be less than numColor.
+	// could be less than NumColor.
 	return palette[:n]
 }
 
-func (q *MedianCutQuantizer) Quantize(m image.Image, numColor int) (*image.Paletted, error) {
+func (q *MedianCutQuantizer) Quantize(m image.Image) (*image.Paletted, error) {
 	bounds := m.Bounds()
 	points := make([]point, bounds.Dx()*bounds.Dy())
-	colorSet := make(map[string]color.Color, numColor)
+	colorSet := make(map[string]color.Color, q.NumColor)
 	i := 0
 	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
 		for x := bounds.Min.X; x < bounds.Max.X; x++ {
@@ -223,7 +225,7 @@ func (q *MedianCutQuantizer) Quantize(m image.Image, numColor int) (*image.Palet
 		}
 	}
 	var palette color.Palette
-	if len(colorSet) <= numColor {
+	if len(colorSet) <= q.NumColor {
 		// No need to quantize since the total number of colors
 		// fits within the limit.
 		palette = make(color.Palette, len(colorSet))
@@ -233,7 +235,7 @@ func (q *MedianCutQuantizer) Quantize(m image.Image, numColor int) (*image.Palet
 			i++
 		}
 	} else {
-		palette = q.medianCut(points, numColor)
+		palette = q.medianCut(points)
 	}
 
 	pm := image.NewPaletted(m.Bounds(), palette)
@@ -248,19 +250,21 @@ func (q *MedianCutQuantizer) Quantize(m image.Image, numColor int) (*image.Palet
 }
 
 func main() {
-	f, err := os.Open("scape.gif")
+	f, err := os.Open("testdata/scape.gif")
 	if err != nil {
 		log.Fatalf("os.Open: %q", err)
 	}
 	defer f.Close()
 
-	m, _, err := image.Decode(f)
+	g, err := gif.DecodeAll(f)
 	if err != nil {
-		log.Fatalf("image.Decode: %q\n", err)
+		log.Fatalf("gif.DecodeAll: %q\n", err)
 	}
+	log.Printf("num images: %d, delay: %v, loopcount: %d", len(g.Image), g.Delay, g.LoopCount)
 
-	q := MedianCutQuantizer{}
-	pImage, _ = q.Quantize(m, 256)
+	pImage = g.Image[0]
+	q := MedianCutQuantizer{NumColor: 256}
+	pImage, _ = q.Quantize(g.Image[0])
 
 	http.HandleFunc("/", handleIndex)
 	fmt.Println("Serving result image at http://locahost:8080")
