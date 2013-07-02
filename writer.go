@@ -5,9 +5,9 @@ import (
 	"compress/lzw"
 	"errors"
 	"image"
+	"image/color"
 	"image/gif"
 	"io"
-	_ "log"
 )
 
 ////// ALREADY EXISTENT IN GIF PACKAGE.
@@ -37,9 +37,9 @@ func log2Int256(x int) int {
 }
 
 // Little-endian.
-func writeUint16(b []byte, u uint16) {
-	b[0] = byte(u)
-	b[1] = byte(u >> 8)
+func writeUint16(b []uint8, u uint16) {
+	b[0] = uint8(u)
+	b[1] = uint8(u >> 8)
 }
 
 type writer interface {
@@ -52,7 +52,7 @@ type encoder struct {
 	g            *gif.GIF
 	bitsPerPixel int
 	err          error
-	buf          [1024]byte // must be at least 768 so we can write color map
+	buf          [16]byte
 }
 
 func newEncoder(w io.Writer) *encoder {
@@ -84,7 +84,7 @@ func (b *blockWriter) Write(data []byte) (int, error) {
 		b.slice = b.tmp[1:256]
 		n := copy(b.slice, data[total:])
 		total += n
-		b.tmp[0] = byte(n)
+		b.tmp[0] = uint8(n)
 
 		n, b.err = b.w.Write(b.tmp[:n+1])
 		if b.err != nil {
@@ -120,32 +120,14 @@ func (e *encoder) writeHeader() {
 	writeUint16(e.buf[2:4], uint16(pm.Bounds().Dy()))
 	e.write(e.buf[:4])
 
-	// 10      1 byte   bit 0:    Global Color Table Flag (GCTF)
-	//                  bit 1..3: Color Resolution
-	//                  bit 4:    Sort Flag to Global Color Table
-	//                  bit 5..7: Size of Global Color Table: 2^(1+n)
-	// TODO: Clean this up.
 	e.bitsPerPixel = log2Int256(len(pm.Palette)) + 1
 	e.buf[0] = 0x80 | ((uint8(e.bitsPerPixel) - 1) << 4) | (uint8(e.bitsPerPixel) - 1)
 	e.buf[1] = 0x00 // Background Color Index.
 	e.buf[2] = 0x00 // Pixel Aspect Ratio.
 	e.write(e.buf[:3])
+
 	// Global Color Table.
-	for i := 0; i < log2Lookup[e.bitsPerPixel-1]; i++ {
-		if i < len(pm.Palette) {
-			r, g, b, _ := pm.Palette[i].RGBA()
-			// TODO: If the color table is written directly, then
-			// the size of e.buf is superfluously large.
-			e.write([]byte{
-				byte(r >> 8),
-				byte(g >> 8),
-				byte(b >> 8),
-			})
-		} else {
-			// Pad with black.
-			e.write([]byte{0x00, 0x00, 0x00})
-		}
-	}
+	e.writeColorTable(pm.Palette, e.bitsPerPixel-1)
 
 	// Add animation info if necessary.
 	if len(e.g.Image) > 1 {
@@ -165,24 +147,45 @@ func (e *encoder) writeHeader() {
 	}
 }
 
+func (e *encoder) writeColorTable(p color.Palette, size int) {
+	if e.err != nil {
+		return
+	}
+
+	for i := 0; i < log2Lookup[size]; i++ {
+		if i < len(p) {
+			r, g, b, _ := p[i].RGBA()
+			e.buf[0] = uint8(r >> 8)
+			e.buf[1] = uint8(g >> 8)
+			e.buf[2] = uint8(b >> 8)
+		} else {
+			// Pad with black.
+			e.buf[0] = 0x00
+			e.buf[1] = 0x00
+			e.buf[2] = 0x00
+		}
+		e.write(e.buf[:3])
+	}
+}
+
 func (e *encoder) writeImageBlock(pm *image.Paletted, delay int) {
 	if e.err != nil {
 		return
 	}
 
-	transIndex := -1
+	transparentIndex := -1
 	for i, c := range pm.Palette {
 		if _, _, _, a := c.RGBA(); a == 0 {
-			transIndex = i
+			transparentIndex = i
 			break
 		}
 	}
 
-	if delay > 0 || transIndex != -1 {
+	if delay > 0 || transparentIndex != -1 {
 		e.buf[0] = sExtension  // Extension Introducer.
 		e.buf[1] = gcLabel     // Graphic Control Label.
 		e.buf[2] = gcBlockSize // Block Size.
-		if transIndex != -1 {
+		if transparentIndex != -1 {
 			e.buf[3] = 0x01
 		} else {
 			e.buf[3] = 0x00
@@ -190,8 +193,8 @@ func (e *encoder) writeImageBlock(pm *image.Paletted, delay int) {
 		writeUint16(e.buf[4:6], uint16(delay)) // Delay Time (1/100ths of a second)
 
 		// Transparent color index.
-		if transIndex != -1 {
-			e.buf[6] = uint8(transIndex)
+		if transparentIndex != -1 {
+			e.buf[6] = uint8(transparentIndex)
 		} else {
 			e.buf[6] = 0x00
 		}
@@ -206,27 +209,13 @@ func (e *encoder) writeImageBlock(pm *image.Paletted, delay int) {
 	e.write(e.buf[:9])
 
 	if len(pm.Palette) > 0 {
-		size := log2Int256(len(pm.Palette)) // Size of Local Color Table: 2^(1+n).
+		paddedSize := log2Int256(len(pm.Palette)) // Size of Local Color Table: 2^(1+n).
 		// Interlacing is not supported.
-		e.buf[0] = 0x80 | uint8(size)
+		e.buf[0] = 0x80 | uint8(paddedSize)
 		e.write(e.buf[:1])
 
 		// Local Color Table.
-		for i := 0; i < log2Lookup[size]; i++ {
-			if i < len(pm.Palette) {
-				r, g, b, _ := pm.Palette[i].RGBA()
-				// TODO: If the color table is written directly, then
-				// the size of e.buf is superfluously large.
-				e.write([]byte{
-					byte(r >> 8),
-					byte(g >> 8),
-					byte(b >> 8),
-				})
-			} else {
-				// Pad with black.
-				e.write([]byte{0x00, 0x00, 0x00})
-			}
-		}
+		e.writeColorTable(pm.Palette, paddedSize)
 	} else {
 		e.buf[0] = 0x00
 		e.write(e.buf[:1])
@@ -236,7 +225,7 @@ func (e *encoder) writeImageBlock(pm *image.Paletted, delay int) {
 	if litWidth < 2 {
 		litWidth = 2
 	}
-	e.buf[0] = byte(litWidth)
+	e.buf[0] = uint8(litWidth)
 	e.write(e.buf[:1]) // LZW Minimum Code Size.
 
 	bw := &blockWriter{w: e.w}

@@ -65,7 +65,11 @@ var testCase = []struct {
 	{"testdata/teapool.png", 256, 24 << 8},
 }
 
-// TODO: zero color quantizer.
+// TODO:
+// zero color quantizer.
+// Varying image widths and heights.
+// Transparency within a gif.
+// Mismatched delay and image lengths when encoding an animated gif.
 
 func TestWriter(t *testing.T) {
 	for _, tc := range testCase {
