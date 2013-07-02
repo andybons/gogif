@@ -249,6 +249,13 @@ type Options struct {
 // EncodeAll writes the images in g to w in GIF format with the
 // given loop count and delay between frames.
 func EncodeAll(w io.Writer, g *gif.GIF) error {
+	if len(g.Image) != len(g.Delay) {
+		return errors.New("gif: mismatched image and delay lengths")
+	}
+	if g.LoopCount < 0 {
+		g.LoopCount = 0
+	}
+
 	e := newEncoder(w)
 	e.g = g
 	e.writeHeader()
@@ -269,7 +276,6 @@ func Encode(w io.Writer, m image.Image, o *Options) error {
 	}
 
 	e := newEncoder(w)
-
 	var pm *image.Paletted
 	pm, e.err = o.Quantizer.Quantize(m)
 	if e.err != nil {
