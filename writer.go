@@ -7,7 +7,7 @@ import (
 	"image"
 	"image/gif"
 	"io"
-	"log"
+	_ "log"
 )
 
 ////// ALREADY EXISTENT IN GIF PACKAGE.
@@ -170,19 +170,34 @@ func (e *encoder) writeImageBlock(pm *image.Paletted, delay int) {
 		return
 	}
 
-	if delay > 0 {
+	transIndex := -1
+	for i, c := range pm.Palette {
+		if _, _, _, a := c.RGBA(); a == 0 {
+			transIndex = i
+			break
+		}
+	}
+
+	if delay > 0 || transIndex != -1 {
 		e.buf[0] = sExtension  // Extension Introducer.
 		e.buf[1] = gcLabel     // Graphic Control Label.
 		e.buf[2] = gcBlockSize // Block Size.
-		e.buf[3] = 0x00        // TODO: Transparency support.
-
+		if transIndex != -1 {
+			e.buf[3] = 0x01
+		} else {
+			e.buf[3] = 0x00
+		}
 		writeUint16(e.buf[4:6], uint16(delay)) // Delay Time (1/100ths of a second)
 
-		e.buf[6] = 0x00 // TODO: Transparency support.
+		// Transparent color index.
+		if transIndex != -1 {
+			e.buf[6] = uint8(transIndex)
+		} else {
+			e.buf[6] = 0x00
+		}
 		e.buf[7] = 0x00 // Block Terminator.
 		e.write(e.buf[:8])
 	}
-	log.Println("bounds of image:", pm.Bounds())
 	e.buf[0] = sImageDescriptor
 	writeUint16(e.buf[1:3], uint16(pm.Bounds().Min.X))
 	writeUint16(e.buf[3:5], uint16(pm.Bounds().Min.Y))
@@ -190,7 +205,6 @@ func (e *encoder) writeImageBlock(pm *image.Paletted, delay int) {
 	writeUint16(e.buf[7:9], uint16(pm.Bounds().Dy()))
 	e.write(e.buf[:9])
 
-	log.Println("palette:", pm.Palette)
 	if len(pm.Palette) > 0 {
 		size := log2Int256(len(pm.Palette)) // Size of Local Color Table: 2^(1+n).
 		// Interlacing is not supported.
