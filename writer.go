@@ -18,20 +18,6 @@ const (
 	sTrailer         = 0x3B
 )
 
-// Masks etc.
-const (
-	// Fields.
-	fColorMapFollows = 1 << 7
-
-	// Image fields.
-	ifLocalColorTable = 1 << 7
-	ifInterlace       = 1 << 6
-	ifPixelSizeMask   = 7
-
-	// Graphic control flags.
-	gcTransparentColorSet = 1 << 0
-)
-
 ////// END OF ALREADY EXISTENT STUFF.
 
 const (
@@ -183,7 +169,6 @@ func (e *encoder) writeImageBlock(pm *image.Paletted, delay int) {
 	if e.err != nil {
 		return
 	}
-	log.Println(len(pm.Palette))
 
 	if delay > 0 {
 		e.buf[0] = sExtension  // Extension Introducer.
@@ -197,15 +182,41 @@ func (e *encoder) writeImageBlock(pm *image.Paletted, delay int) {
 		e.buf[7] = 0x00 // Block Terminator.
 		e.write(e.buf[:8])
 	}
-
+	log.Println("bounds of image:", pm.Bounds())
 	e.buf[0] = sImageDescriptor
 	writeUint16(e.buf[1:3], uint16(pm.Bounds().Min.X))
 	writeUint16(e.buf[3:5], uint16(pm.Bounds().Min.Y))
 	writeUint16(e.buf[5:7], uint16(pm.Bounds().Dx()))
 	writeUint16(e.buf[7:9], uint16(pm.Bounds().Dy()))
+	e.write(e.buf[:9])
 
-	e.buf[9] = 0x00 // TODO: Local Color Table support.
-	e.write(e.buf[:10])
+	log.Println("palette:", pm.Palette)
+	if len(pm.Palette) > 0 {
+		size := log2Int256(len(pm.Palette)) // Size of Local Color Table: 2^(1+n).
+		// Interlacing is not supported.
+		e.buf[0] = 0x80 | uint8(size)
+		e.write(e.buf[:1])
+
+		// Local Color Table.
+		for i := 0; i < log2Lookup[size]; i++ {
+			if i < len(pm.Palette) {
+				r, g, b, _ := pm.Palette[i].RGBA()
+				// TODO: If the color table is written directly, then
+				// the size of e.buf is superfluously large.
+				e.write([]byte{
+					byte(r >> 8),
+					byte(g >> 8),
+					byte(b >> 8),
+				})
+			} else {
+				// Pad with black.
+				e.write([]byte{0x00, 0x00, 0x00})
+			}
+		}
+	} else {
+		e.buf[0] = 0x00
+		e.write(e.buf[:1])
+	}
 
 	litWidth := e.bitsPerPixel
 	if litWidth < 2 {
@@ -232,6 +243,8 @@ type Options struct {
 	Quantizer Quantizer
 }
 
+// EncodeAll writes the images in g to w in GIF format with the
+// given loop count and delay between frames.
 func EncodeAll(w io.Writer, g *gif.GIF) error {
 	e := newEncoder(w)
 	e.g = g

@@ -211,13 +211,13 @@ func (q *MedianCutQuantizer) medianCut(points []point) color.Palette {
 func (q *MedianCutQuantizer) Quantize(m image.Image) (*image.Paletted, error) {
 	bounds := m.Bounds()
 	points := make([]point, bounds.Dx()*bounds.Dy())
-	colorSet := make(map[string]color.Color, q.NumColor)
+	colorSet := make(map[color.Color]bool, q.NumColor)
 	i := 0
 	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
 		for x := bounds.Min.X; x < bounds.Max.X; x++ {
 			c := m.At(x, y)
 			r, g, b, _ := c.RGBA()
-			colorSet[fmt.Sprintf("%d,%d,%d", r, g, b)] = c
+			colorSet[c] = true
 			points[i].x[0] = r
 			points[i].x[1] = g
 			points[i].x[2] = b
@@ -230,7 +230,7 @@ func (q *MedianCutQuantizer) Quantize(m image.Image) (*image.Paletted, error) {
 		// fits within the limit.
 		palette = make(color.Palette, len(colorSet))
 		i := 0
-		for _, c := range colorSet {
+		for c, _ := range colorSet {
 			palette[i] = c
 			i++
 		}

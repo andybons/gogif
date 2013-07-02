@@ -95,7 +95,7 @@ func TestWriter(t *testing.T) {
 }
 
 func TestAnimatedWriter(t *testing.T) {
-	f, err := os.Open("testdata/shipit.gif")
+	f, err := os.Open("testdata/scape.gif")
 	if err != nil {
 		t.Errorf("os.Open: %q", err)
 	}
