@@ -1,4 +1,4 @@
-package main
+package gogif
 
 import (
 	"bufio"
@@ -10,7 +10,6 @@ import (
 	"io"
 )
 
-////// ALREADY EXISTENT IN GIF PACKAGE.
 // Section indicators.
 const (
 	sExtension       = 0x21
@@ -18,8 +17,7 @@ const (
 	sTrailer         = 0x3B
 )
 
-////// END OF ALREADY EXISTENT STUFF.
-
+// Graphic control extension fields.
 const (
 	gcLabel     = 0xF9
 	gcBlockSize = 0x04
