@@ -121,7 +121,7 @@ func (pq *priorityQueue) Pop() interface{} {
 	return item
 }
 
-func (pq *priorityQueue) Top() interface{} {
+func (pq *priorityQueue) top() interface{} {
 	n := len(*pq)
 	if n == 0 {
 		return nil
@@ -150,7 +150,7 @@ func (q *MedianCutQuantizer) medianCut(points []point) color.Palette {
 	heap.Init(pq)
 	heap.Push(pq, initialBlock)
 
-	for pq.Len() < q.NumColor && len(pq.Top().(*block).points) > 1 {
+	for pq.Len() < q.NumColor && len(pq.top().(*block).points) > 1 {
 		longestBlock := heap.Pop(pq).(*block)
 		points := longestBlock.points
 		li := longestBlock.longestSideIndex()
