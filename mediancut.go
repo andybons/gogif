@@ -11,23 +11,21 @@ const (
 	numDimensions = 3
 )
 
-func min(x, y uint32) uint32 {
+func min(x, y int) int {
 	if x < y {
 		return x
 	}
 	return y
 }
 
-func max(x, y uint32) uint32 {
+func max(x, y int) int {
 	if x > y {
 		return x
 	}
 	return y
 }
 
-type point struct {
-	x [numDimensions]uint32
-}
+type point [numDimensions]int
 
 type block struct {
 	minCorner, maxCorner point
@@ -37,19 +35,18 @@ type block struct {
 }
 
 func newBlock(p []point) *block {
-	b := &block{points: p}
-	for i := 0; i < numDimensions; i++ {
-		b.minCorner.x[i] = 0
-		b.maxCorner.x[i] = 0xFF
+	return &block{
+		minCorner: point{0x00, 0x00, 0x00},
+		maxCorner: point{0xFF, 0xFF, 0xFF},
+		points:    p,
 	}
-	return b
 }
 
 func (b *block) longestSideIndex() int {
-	m := b.maxCorner.x[0] - b.minCorner.x[0]
+	m := b.maxCorner[0] - b.minCorner[0]
 	maxIndex := 0
 	for i := 1; i < numDimensions; i++ {
-		diff := b.maxCorner.x[i] - b.minCorner.x[i]
+		diff := b.maxCorner[i] - b.minCorner[i]
 		if diff > m {
 			m = diff
 			maxIndex = i
@@ -58,32 +55,22 @@ func (b *block) longestSideIndex() int {
 	return maxIndex
 }
 
-func (b *block) longestSideLength() uint32 {
+func (b *block) longestSideLength() int {
 	i := b.longestSideIndex()
-	return b.maxCorner.x[i] - b.minCorner.x[i]
+	return b.maxCorner[i] - b.minCorner[i]
 }
 
 func (b *block) shrink() {
 	for j := 0; j < numDimensions; j++ {
-		b.minCorner.x[j] = b.points[0].x[j]
-		b.maxCorner.x[j] = b.points[0].x[j]
+		b.minCorner[j] = b.points[0][j]
+		b.maxCorner[j] = b.points[0][j]
 	}
 	for i := 1; i < len(b.points); i++ {
 		for j := 0; j < numDimensions; j++ {
-			b.minCorner.x[j] = min(b.minCorner.x[j], b.points[i].x[j])
-			b.maxCorner.x[j] = max(b.maxCorner.x[j], b.points[i].x[j])
+			b.minCorner[j] = min(b.minCorner[j], b.points[i][j])
+			b.maxCorner[j] = max(b.maxCorner[j], b.points[i][j])
 		}
 	}
-}
-
-type By func(p1, p2 *point) bool
-
-func (by By) Sort(points []point) {
-	ps := &pointSorter{
-		points: points,
-		by:     by,
-	}
-	sort.Sort(ps)
 }
 
 type pointSorter struct {
@@ -91,50 +78,50 @@ type pointSorter struct {
 	by     func(p1, p2 *point) bool
 }
 
-func (ps *pointSorter) Len() int {
-	return len(ps.points)
+func (p *pointSorter) Len() int {
+	return len(p.points)
 }
 
-func (ps *pointSorter) Swap(i, j int) {
-	ps.points[i], ps.points[j] = ps.points[j], ps.points[i]
+func (p *pointSorter) Swap(i, j int) {
+	p.points[i], p.points[j] = p.points[j], p.points[i]
 }
 
-func (ps *pointSorter) Less(i, j int) bool {
-	return ps.by(&ps.points[i], &ps.points[j])
+func (p *pointSorter) Less(i, j int) bool {
+	return p.by(&p.points[i], &p.points[j])
 }
 
-// A PriorityQueue implements heap.Interface and holds blocks.
-type PriorityQueue []*block
+// A priorityQueue implements heap.Interface and holds blocks.
+type priorityQueue []*block
 
-func (pq PriorityQueue) Len() int { return len(pq) }
+func (pq priorityQueue) Len() int { return len(pq) }
 
-func (pq PriorityQueue) Less(i, j int) bool {
+func (pq priorityQueue) Less(i, j int) bool {
 	return pq[i].longestSideLength() > pq[j].longestSideLength()
 }
 
-func (pq PriorityQueue) Swap(i, j int) {
+func (pq priorityQueue) Swap(i, j int) {
 	pq[i], pq[j] = pq[j], pq[i]
 	pq[i].index = i
 	pq[j].index = j
 }
 
-func (pq *PriorityQueue) Push(x interface{}) {
+func (pq *priorityQueue) Push(x interface{}) {
 	n := len(*pq)
 	item := x.(*block)
 	item.index = n
 	*pq = append(*pq, item)
 }
 
-func (pq *PriorityQueue) Pop() interface{} {
+func (pq *priorityQueue) Pop() interface{} {
 	old := *pq
 	n := len(old)
 	item := old[n-1]
 	item.index = -1 // for safety
-	*pq = old[0 : n-1]
+	*pq = old[:n-1]
 	return item
 }
 
-func (pq *PriorityQueue) Top() interface{} {
+func (pq *priorityQueue) Top() interface{} {
 	n := len(*pq)
 	if n == 0 {
 		return nil
@@ -142,32 +129,39 @@ func (pq *PriorityQueue) Top() interface{} {
 	return (*pq)[n-1]
 }
 
-type Quantizer interface {
-	Quantize(m image.Image) (*image.Paletted, error)
-}
-
+// MedianCutQuantizer constructs a palette with a maximum of
+// NumColor colors by iteratively splitting clusters of color
+// points mapped on a three-dimensional (RGB) Euclidian space.
+// Once the number of clusters is within the specified bounds,
+// the resulting color is computed by averaging those within
+// each grouping.
 type MedianCutQuantizer struct {
 	NumColor int
 }
 
 func (q *MedianCutQuantizer) medianCut(points []point) color.Palette {
+	if q.NumColor == 0 {
+		return color.Palette{}
+	}
+
 	initialBlock := newBlock(points)
 	initialBlock.shrink()
-	pq := &PriorityQueue{}
+	pq := &priorityQueue{}
 	heap.Init(pq)
 	heap.Push(pq, initialBlock)
 
 	for pq.Len() < q.NumColor && len(pq.Top().(*block).points) > 1 {
 		longestBlock := heap.Pop(pq).(*block)
 		points := longestBlock.points
-
-		// Instead of sorting the entire slice, finding the median using an algorithm
-		// like introselect would give much better performance. Do before submission.
-		func(li int) {
-			By(func(p1, p2 *point) bool { return p1.x[li] < p2.x[li] }).Sort(points)
-		}(longestBlock.longestSideIndex())
+		li := longestBlock.longestSideIndex()
+		// TODO: Instead of sorting the entire slice, finding the median using an
+		// algorithm like introselect would give much better performance.
+		sort.Sort(&pointSorter{
+			points: points,
+			by:     func(p1, p2 *point) bool { return p1[li] < p2[li] },
+		})
 		median := len(points) / 2
-		block1 := newBlock(points[0:median])
+		block1 := newBlock(points[:median])
 		block2 := newBlock(points[median:])
 		block1.shrink()
 		block2.shrink()
@@ -179,20 +173,16 @@ func (q *MedianCutQuantizer) medianCut(points []point) color.Palette {
 	var n int
 	for n = 0; pq.Len() > 0; n++ {
 		block := heap.Pop(pq).(*block)
-		sum := make([]uint32, numDimensions)
+		var sum [numDimensions]int
 		for i := 0; i < len(block.points); i++ {
 			for j := 0; j < numDimensions; j++ {
-				sum[j] += block.points[i].x[j]
+				sum[j] += block.points[i][j]
 			}
 		}
-		var avgPoint point
-		for j := 0; j < numDimensions; j++ {
-			avgPoint.x[j] = sum[j] / uint32(len(block.points))
-		}
 		palette[n] = color.RGBA64{
-			R: uint16(avgPoint.x[0]),
-			G: uint16(avgPoint.x[1]),
-			B: uint16(avgPoint.x[2]),
+			R: uint16(sum[0] / len(block.points)),
+			G: uint16(sum[1] / len(block.points)),
+			B: uint16(sum[2] / len(block.points)),
 			A: 0xFFFF,
 		}
 	}
@@ -201,43 +191,40 @@ func (q *MedianCutQuantizer) medianCut(points []point) color.Palette {
 	return palette[:n]
 }
 
-func (q *MedianCutQuantizer) Quantize(m image.Image) (*image.Paletted, error) {
-	bounds := m.Bounds()
+func (q *MedianCutQuantizer) Quantize(dst *image.Paletted, src image.Image) {
+	bounds := src.Bounds()
 	points := make([]point, bounds.Dx()*bounds.Dy())
-	colorSet := make(map[color.Color]bool, q.NumColor)
+	colorSet := make(map[uint32]color.Color, q.NumColor)
 	i := 0
 	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
 		for x := bounds.Min.X; x < bounds.Max.X; x++ {
-			c := m.At(x, y)
+			c := src.At(x, y)
 			r, g, b, _ := c.RGBA()
-			colorSet[c] = true
-			points[i].x[0] = r
-			points[i].x[1] = g
-			points[i].x[2] = b
+			colorSet[(r>>8)<<16|(g>>8)<<8|b>>8] = c
+			points[i][0] = int(r)
+			points[i][1] = int(g)
+			points[i][2] = int(b)
 			i++
 		}
 	}
-	var palette color.Palette
 	if len(colorSet) <= q.NumColor {
 		// No need to quantize since the total number of colors
-		// fits within the limit.
-		palette = make(color.Palette, len(colorSet))
+		// fits within the palette.
+		dst.Palette = make(color.Palette, len(colorSet))
 		i := 0
-		for c, _ := range colorSet {
-			palette[i] = c
+		for _, c := range colorSet {
+			dst.Palette[i] = c
 			i++
 		}
 	} else {
-		palette = q.medianCut(points)
+		dst.Palette = q.medianCut(points)
 	}
 
-	pm := image.NewPaletted(m.Bounds(), palette)
-	pm.Stride = m.Bounds().Dx()
+	dst.Stride = bounds.Dx()
 	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
 		for x := bounds.Min.X; x < bounds.Max.X; x++ {
-			pm.Set(x, y, m.At(x, y))
+			// TODO: this should be done more efficiently.
+			dst.Set(x, y, src.At(x, y))
 		}
 	}
-
-	return pm, nil
 }

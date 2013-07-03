@@ -40,19 +40,29 @@ func writeUint16(b []uint8, u uint16) {
 	b[1] = uint8(u >> 8)
 }
 
+// writer is a buffered writer.
 type writer interface {
+	Flush() error
 	io.Writer
 	io.ByteWriter
 }
 
+// encoder encodes an image to the GIF format.
 type encoder struct {
-	w            writer
-	g            *gif.GIF
+	// w is the writer to write to. err is the first error encountered during
+	// writing. All attempted writes after the first error become no-ops.
+	w   writer
+	err error
+	// g is a reference to the data that is being encoded.
+	g *gif.GIF
+	// bitsPerPixel is the number of bits required to represent each color
+	// in the image.
 	bitsPerPixel int
-	err          error
-	buf          [16]byte
+	// buf is a scratch buffer. It must be at least 768 so we can write the color map.
+	buf [1024]byte
 }
 
+// newEncoder returns a new encoder with the given writer.
 func newEncoder(w io.Writer) *encoder {
 	var e encoder
 	if ww, ok := w.(writer); ok {
@@ -63,11 +73,14 @@ func newEncoder(w io.Writer) *encoder {
 	return &e
 }
 
+// blockWriter writes the block structure of GIF image data, which
+// comprises (n, (n bytes)) blocks, with 1 <= n <= 255. It is the
+// writer given to the LZW encoder, which is thus immune to the
+// blocking.
 type blockWriter struct {
-	w     writer
-	slice []byte
-	err   error
-	tmp   [256]byte
+	w   writer
+	err error
+	tmp [256]byte
 }
 
 func (b *blockWriter) Write(data []byte) (int, error) {
@@ -79,8 +92,7 @@ func (b *blockWriter) Write(data []byte) (int, error) {
 	}
 	total := 0
 	for total < len(data) {
-		b.slice = b.tmp[1:256]
-		n := copy(b.slice, data[total:])
+		n := copy(b.tmp[1:256], data[total:])
 		total += n
 		b.tmp[0] = uint8(n)
 
@@ -92,11 +104,25 @@ func (b *blockWriter) Write(data []byte) (int, error) {
 	return total, b.err
 }
 
+func (e *encoder) flush() {
+	if e.err != nil {
+		return
+	}
+	e.err = e.w.Flush()
+}
+
 func (e *encoder) write(p []byte) {
 	if e.err != nil {
 		return
 	}
 	_, e.err = e.w.Write(p)
+}
+
+func (e *encoder) writeByte(b byte) {
+	if e.err != nil {
+		return
+	}
+	e.err = e.w.WriteByte(b)
 }
 
 func (e *encoder) writeHeader() {
@@ -129,8 +155,8 @@ func (e *encoder) writeHeader() {
 
 	// Add animation info if necessary.
 	if len(e.g.Image) > 1 {
-		e.buf[0] = 0x21 // Extention Introducer.
-		e.buf[1] = 0xff // Aplication Label.
+		e.buf[0] = 0x21 // Extension Introducer.
+		e.buf[1] = 0xff // Application Label.
 		e.buf[2] = 0x0b // Block Size.
 		e.write(e.buf[:3])
 		_, e.err = io.WriteString(e.w, "NETSCAPE2.0") // Application Identifier.
@@ -153,21 +179,32 @@ func (e *encoder) writeColorTable(p color.Palette, size int) {
 	for i := 0; i < log2Lookup[size]; i++ {
 		if i < len(p) {
 			r, g, b, _ := p[i].RGBA()
-			e.buf[0] = uint8(r >> 8)
-			e.buf[1] = uint8(g >> 8)
-			e.buf[2] = uint8(b >> 8)
+			e.buf[3*i] = uint8(r >> 8)
+			e.buf[3*i+1] = uint8(g >> 8)
+			e.buf[3*i+2] = uint8(b >> 8)
 		} else {
 			// Pad with black.
-			e.buf[0] = 0x00
-			e.buf[1] = 0x00
-			e.buf[2] = 0x00
+			e.buf[3*i] = 0x00
+			e.buf[3*i+1] = 0x00
+			e.buf[3*i+2] = 0x00
 		}
-		e.write(e.buf[:3])
 	}
+	e.write(e.buf[:3*log2Lookup[size]])
 }
 
 func (e *encoder) writeImageBlock(pm *image.Paletted, delay int) {
 	if e.err != nil {
+		return
+	}
+
+	if len(pm.Palette) == 0 {
+		e.err = errors.New("gif: cannot encode image block with empty palette")
+		return
+	}
+
+	b := pm.Bounds()
+	if b.Dx() >= 1<<16 || b.Dy() >= 1<<16 || b.Min.X >= 1<<16 || b.Min.Y >= 1<<16 {
+		e.err = errors.New("gif: image block is too large to encode")
 		return
 	}
 
@@ -200,31 +237,24 @@ func (e *encoder) writeImageBlock(pm *image.Paletted, delay int) {
 		e.write(e.buf[:8])
 	}
 	e.buf[0] = sImageDescriptor
-	writeUint16(e.buf[1:3], uint16(pm.Bounds().Min.X))
-	writeUint16(e.buf[3:5], uint16(pm.Bounds().Min.Y))
-	writeUint16(e.buf[5:7], uint16(pm.Bounds().Dx()))
-	writeUint16(e.buf[7:9], uint16(pm.Bounds().Dy()))
+	writeUint16(e.buf[1:3], uint16(b.Min.X))
+	writeUint16(e.buf[3:5], uint16(b.Min.Y))
+	writeUint16(e.buf[5:7], uint16(b.Dx()))
+	writeUint16(e.buf[7:9], uint16(b.Dy()))
 	e.write(e.buf[:9])
 
-	if len(pm.Palette) > 0 {
-		paddedSize := log2Int256(len(pm.Palette)) // Size of Local Color Table: 2^(1+n).
-		// Interlacing is not supported.
-		e.buf[0] = 0x80 | uint8(paddedSize)
-		e.write(e.buf[:1])
+	paddedSize := log2Int256(len(pm.Palette)) // Size of Local Color Table: 2^(1+n).
+	// Interlacing is not supported.
+	e.writeByte(0x80 | uint8(paddedSize))
 
-		// Local Color Table.
-		e.writeColorTable(pm.Palette, paddedSize)
-	} else {
-		e.buf[0] = 0x00
-		e.write(e.buf[:1])
-	}
+	// Local Color Table.
+	e.writeColorTable(pm.Palette, paddedSize)
 
 	litWidth := e.bitsPerPixel
 	if litWidth < 2 {
 		litWidth = 2
 	}
-	e.buf[0] = uint8(litWidth)
-	e.write(e.buf[:1]) // LZW Minimum Code Size.
+	e.writeByte(uint8(litWidth)) // LZW Minimum Code Size.
 
 	bw := &blockWriter{w: e.w}
 	lzww := lzw.NewWriter(bw, lzw.LSB, litWidth)
@@ -234,9 +264,14 @@ func (e *encoder) writeImageBlock(pm *image.Paletted, delay int) {
 		return
 	}
 	lzww.Close()
+	e.writeByte(0x00) // Block Terminator.
+}
 
-	e.buf[0] = 0x00 // Block Terminator.
-	e.write(e.buf[:1])
+// A Quantizer interface is used by an encoder to construct an
+// image with a restricted color palette.
+type Quantizer interface {
+	// Quantize sets dst.Palette as well as dst's pixels.
+	Quantize(dst *image.Paletted, src image.Image)
 }
 
 // Options are the encoding parameters.
@@ -247,6 +282,10 @@ type Options struct {
 // EncodeAll writes the images in g to w in GIF format with the
 // given loop count and delay between frames.
 func EncodeAll(w io.Writer, g *gif.GIF) error {
+	if len(g.Image) == 0 {
+		return errors.New("gif: must provide at least one image")
+	}
+
 	if len(g.Image) != len(g.Delay) {
 		return errors.New("gif: mismatched image and delay lengths")
 	}
@@ -260,8 +299,8 @@ func EncodeAll(w io.Writer, g *gif.GIF) error {
 	for i, pm := range g.Image {
 		e.writeImageBlock(pm, g.Delay[i])
 	}
-	e.buf[0] = sTrailer
-	e.write(e.buf[:1])
+	e.writeByte(sTrailer)
+	e.flush()
 	return e.err
 }
 
@@ -273,18 +312,18 @@ func Encode(w io.Writer, m image.Image, o *Options) error {
 		return errors.New("gif: image is too large to encode")
 	}
 
-	e := newEncoder(w)
-	var pm *image.Paletted
-	pm, e.err = o.Quantizer.Quantize(m)
-	if e.err != nil {
-		return e.err
+	if o == nil || o.Quantizer == nil {
+		o = &Options{Quantizer: &MedianCutQuantizer{NumColor: 256}}
 	}
-	e.g = &gif.GIF{Image: []*image.Paletted{pm}}
 
-	e.writeHeader()
-	e.writeImageBlock(pm, 0)
+	pm, ok := m.(*image.Paletted)
+	if !ok {
+		pm = image.NewPaletted(b, nil)
+		o.Quantizer.Quantize(pm, m)
+	}
 
-	e.buf[0] = sTrailer
-	e.write(e.buf[:1])
-	return e.err
+	return EncodeAll(w, &gif.GIF{
+		Image: []*image.Paletted{pm},
+		Delay: []int{0},
+	})
 }

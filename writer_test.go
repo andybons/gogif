@@ -2,31 +2,33 @@ package gogif
 
 import (
 	"bytes"
-	_ "encoding/hex"
 	"image"
+	"image/color"
 	"image/gif"
-	"image/png"
+	_ "image/png"
 	"io/ioutil"
+	"math/rand"
 	"os"
 	"testing"
 )
 
-func readPng(filename string) (image.Image, error) {
+func readImg(filename string) (image.Image, error) {
 	f, err := os.Open(filename)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
-	return png.Decode(f)
+	m, _, err := image.Decode(f)
+	return m, err
 }
 
-func readGif(filename string) (image.Image, error) {
+func readGIF(filename string) (*gif.GIF, error) {
 	f, err := os.Open(filename)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
-	return gif.Decode(f)
+	return gif.DecodeAll(f)
 }
 
 func delta(u0, u1 uint32) int64 {
@@ -59,26 +61,21 @@ func averageDelta(m0, m1 image.Image) int64 {
 
 var testCase = []struct {
 	filename  string
-	numColor  int
 	tolerance int64
 }{
-	{"testdata/teapool.png", 256, 24 << 8},
+	{"testdata/video-001.png", 1 << 10},
+	{"testdata/video-001.gif", 0},
+	{"testdata/video-001.interlaced.gif", 0},
 }
-
-// TODO:
-// zero color quantizer.
-// Varying image widths and heights.
-// Transparency within a gif.
-// Mismatched delay and image lengths when encoding an animated gif.
 
 func TestWriter(t *testing.T) {
 	for _, tc := range testCase {
-		m0, err := readPng(tc.filename)
+		m0, err := readImg(tc.filename)
 		if err != nil {
 			t.Error(tc.filename, err)
 		}
 		var buf bytes.Buffer
-		err = Encode(&buf, m0, &Options{Quantizer: &MedianCutQuantizer{NumColor: 256}})
+		err = Encode(&buf, m0, nil)
 		if err != nil {
 			t.Error(tc.filename, err)
 		}
@@ -90,55 +87,111 @@ func TestWriter(t *testing.T) {
 			t.Errorf("%s, bounds differ: %v and %v", tc.filename, m0.Bounds(), m1.Bounds())
 		}
 		// Compare the average delta to the tolerance level.
-		t.Log("avg delta:", averageDelta(m0, m1))
-		if averageDelta(m0, m1) > tc.tolerance {
-			t.Errorf("%s, numColor=%d: average delta is too high", tc.filename, tc.numColor)
+		avgDelta := averageDelta(m0, m1)
+		if avgDelta > tc.tolerance {
+			t.Errorf("%s: average delta is too high. expected: %d, got %d", tc.filename, tc.tolerance, avgDelta)
 			continue
 		}
 	}
 }
 
-func TestAnimatedWriter(t *testing.T) {
-	f, err := os.Open("testdata/scape.gif")
-	if err != nil {
-		t.Errorf("os.Open: %q", err)
-	}
-	defer f.Close()
-	g, err := gif.DecodeAll(f)
-	if err != nil {
-		t.Error(err)
-	}
-	var buf bytes.Buffer
-	if err := EncodeAll(&buf, g); err != nil {
-		t.Error(err)
-	}
-	ioutil.WriteFile("test3.gif", buf.Bytes(), 0660)
+var frames = []string{
+	"testdata/video-001.gif",
+	"testdata/video-005.gray.gif",
 }
 
-func TestWrite2(t *testing.T) {
-	m, err := readPng("testdata/teapool.png")
-	if err != nil {
-		t.Errorf("readPng: expected no error, but got %q\n", err.Error())
+func TestEncodeAll(t *testing.T) {
+	g0 := &gif.GIF{
+		Image:     make([]*image.Paletted, len(frames)),
+		Delay:     make([]int, len(frames)),
+		LoopCount: 5,
+	}
+	for i, f := range frames {
+		m, err := readGIF(f)
+		if err != nil {
+			t.Error(f, err)
+		}
+		g0.Image[i] = m.Image[0]
 	}
 	var buf bytes.Buffer
-	err = Encode(&buf, m, &Options{Quantizer: &MedianCutQuantizer{NumColor: 256}})
-	if err != nil {
-		t.Errorf("Encode: expected no error, but got %q\n", err.Error())
+	if err := EncodeAll(&buf, g0); err != nil {
+		t.Error("EncodeAll:", err)
 	}
-	ioutil.WriteFile("test2.gif", buf.Bytes(), 0660)
-	//t.Log("\n", hex.Dump(buf.Bytes()))
+	g1, err := gif.DecodeAll(&buf)
+	if err != nil {
+		t.Error("DecodeAll:", err)
+	}
+	if g0.LoopCount != g1.LoopCount {
+		t.Errorf("loop counts differ: %d and %d", g0.LoopCount, g1.LoopCount)
+	}
+	for i := range g0.Image {
+		m0, m1 := g0.Image[i], g1.Image[i]
+		if m0.Bounds() != m1.Bounds() {
+			t.Errorf("%s, bounds differ: %v and %v", frames[i], m0.Bounds(), m1.Bounds())
+		}
+		d0, d1 := g0.Delay[i], g1.Delay[i]
+		if d0 != d1 {
+			t.Errorf("%s: delay values differ: %d and %d", frames[i], d0, d1)
+		}
+	}
+
+	g1.Delay = make([]int, 1)
+	if err := EncodeAll(ioutil.Discard, g1); err == nil {
+		t.Error("expected error from mismatched delay and image slice lengths")
+	}
+	if err := EncodeAll(ioutil.Discard, &gif.GIF{}); err == nil {
+		t.Error("expected error from providing empty gif")
+	}
 }
 
-func TestWrite1(t *testing.T) {
-	m, err := readGif("testdata/scape.gif")
-	if err != nil {
-		t.Errorf("readPng: expected no error, but got %q\n", err.Error())
+func BenchmarkEncode(b *testing.B) {
+	b.StopTimer()
+
+	bo := image.Rect(0, 0, 640, 480)
+	rnd := rand.New(rand.NewSource(123))
+
+	// Restrict to a 256-color paletted image to avoid quantization path.
+	palette := make(color.Palette, 256)
+	for i := range palette {
+		palette[i] = color.RGBA{
+			uint8(rnd.Intn(256)),
+			uint8(rnd.Intn(256)),
+			uint8(rnd.Intn(256)),
+			255,
+		}
 	}
-	var buf bytes.Buffer
-	err = Encode(&buf, m, &Options{Quantizer: &MedianCutQuantizer{NumColor: 256}})
-	if err != nil {
-		t.Errorf("Encode: expected no error, but got %q\n", err.Error())
+	img := image.NewPaletted(image.Rect(0, 0, 640, 480), palette)
+	for y := bo.Min.Y; y < bo.Max.Y; y++ {
+		for x := bo.Min.X; x < bo.Max.X; x++ {
+			img.Set(x, y, palette[rnd.Intn(256)])
+		}
 	}
-	ioutil.WriteFile("test1.gif", buf.Bytes(), 0660)
-	//t.Log("\n", hex.Dump(buf.Bytes()))
+
+	b.SetBytes(640 * 480 * 4)
+	b.StartTimer()
+	for i := 0; i < b.N; i++ {
+		Encode(ioutil.Discard, img, nil)
+	}
+}
+
+func BenchmarkQuantizedEncode(b *testing.B) {
+	b.StopTimer()
+	img := image.NewRGBA(image.Rect(0, 0, 640, 480))
+	bo := img.Bounds()
+	rnd := rand.New(rand.NewSource(123))
+	for y := bo.Min.Y; y < bo.Max.Y; y++ {
+		for x := bo.Min.X; x < bo.Max.X; x++ {
+			img.SetRGBA(x, y, color.RGBA{
+				uint8(rnd.Intn(256)),
+				uint8(rnd.Intn(256)),
+				uint8(rnd.Intn(256)),
+				255,
+			})
+		}
+	}
+	b.SetBytes(640 * 480 * 4)
+	b.StartTimer()
+	for i := 0; i < b.N; i++ {
+		Encode(ioutil.Discard, img, nil)
+	}
 }

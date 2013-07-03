@@ -5,7 +5,6 @@ import (
 	"gogif"
 	"image"
 	"image/gif"
-	"image/jpeg"
 	"log"
 	"net/http"
 	"os"
@@ -24,18 +23,16 @@ func main() {
 	}
 	log.Printf("num images: %d, delay: %v, loopcount: %d", len(g.Image), g.Delay, g.LoopCount)
 
-	pImage = g.Image[0]
-	q := gogif.MedianCutQuantizer{NumColor: 256}
-	pImage, _ = q.Quantize(g.Image[0])
+	m = g.Image[0]
 
 	http.HandleFunc("/", handleIndex)
 	fmt.Println("Serving result image at http://locahost:8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
-var pImage *image.Paletted
+var m image.Image
 
 func handleIndex(w http.ResponseWriter, req *http.Request) {
-	w.Header().Set("Content-Type", "image/jpeg")
-	jpeg.Encode(w, pImage, nil)
+	w.Header().Set("Content-Type", "image/gif")
+	gogif.Encode(w, m, nil)
 }
