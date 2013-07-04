@@ -4,6 +4,7 @@ import (
 	"container/heap"
 	"image"
 	"image/color"
+	"image/draw"
 	"sort"
 )
 
@@ -129,6 +130,22 @@ func (pq *priorityQueue) top() interface{} {
 	return (*pq)[n-1]
 }
 
+// clip clips r against each image's bounds (after translating into
+// the destination image's co-ordinate space) and shifts the point
+// sp by the same amount as the change in r.Min.
+func clip(dst draw.Image, r *image.Rectangle, src image.Image, sp *image.Point) {
+	orig := r.Min
+	*r = r.Intersect(dst.Bounds())
+	*r = r.Intersect(src.Bounds().Add(orig.Sub(*sp)))
+	dx := r.Min.X - orig.X
+	dy := r.Min.Y - orig.Y
+	if dx == 0 && dy == 0 {
+		return
+	}
+	(*sp).X += dx
+	(*sp).Y += dy
+}
+
 // MedianCutQuantizer constructs a palette with a maximum of
 // NumColor colors by iteratively splitting clusters of color
 // points mapped on a three-dimensional (RGB) Euclidian space.
@@ -191,13 +208,17 @@ func (q *MedianCutQuantizer) medianCut(points []point) color.Palette {
 	return palette[:n]
 }
 
-func (q *MedianCutQuantizer) Quantize(dst *image.Paletted, src image.Image) {
-	bounds := src.Bounds()
-	points := make([]point, bounds.Dx()*bounds.Dy())
+func (q *MedianCutQuantizer) Quantize(dst *image.Paletted, r image.Rectangle, src image.Image, sp image.Point) {
+	clip(dst, &r, src, &sp)
+	if r.Empty() {
+		return
+	}
+
+	points := make([]point, r.Dx()*r.Dy())
 	colorSet := make(map[uint32]color.Color, q.NumColor)
 	i := 0
-	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
-		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+	for y := r.Min.Y; y < r.Max.Y; y++ {
+		for x := r.Min.X; x < r.Max.X; x++ {
 			c := src.At(x, y)
 			r, g, b, _ := c.RGBA()
 			colorSet[(r>>8)<<16|(g>>8)<<8|b>>8] = c
@@ -220,11 +241,10 @@ func (q *MedianCutQuantizer) Quantize(dst *image.Paletted, src image.Image) {
 		dst.Palette = q.medianCut(points)
 	}
 
-	dst.Stride = bounds.Dx()
-	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
-		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+	for y := 0; y < r.Dy(); y++ {
+		for x := 0; x < r.Dx(); x++ {
 			// TODO: this should be done more efficiently.
-			dst.Set(x, y, src.At(x, y))
+			dst.Set(sp.X+x, sp.Y+y, src.At(r.Min.X+x, r.Min.Y+y))
 		}
 	}
 }

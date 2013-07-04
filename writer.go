@@ -271,7 +271,7 @@ func (e *encoder) writeImageBlock(pm *image.Paletted, delay int) {
 // image with a restricted color palette.
 type Quantizer interface {
 	// Quantize sets dst.Palette as well as dst's pixels.
-	Quantize(dst *image.Paletted, src image.Image)
+	Quantize(dst *image.Paletted, r image.Rectangle, src image.Image, sp image.Point)
 }
 
 // Options are the encoding parameters.
@@ -319,7 +319,7 @@ func Encode(w io.Writer, m image.Image, o *Options) error {
 	pm, ok := m.(*image.Paletted)
 	if !ok {
 		pm = image.NewPaletted(b, nil)
-		o.Quantizer.Quantize(pm, m)
+		o.Quantizer.Quantize(pm, b, m, image.ZP)
 	}
 
 	return EncodeAll(w, &gif.GIF{
