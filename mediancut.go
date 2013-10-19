@@ -140,7 +140,7 @@ func (pq *priorityQueue) top() interface{} {
 func clip(dst draw.Image, r *image.Rectangle, src image.Image, sp *image.Point) {
 	orig := r.Min
 	*r = r.Intersect(dst.Bounds())
-	*r = r.Intersect(src.Bounds().Add(orig.Sub(*sp)))
+	*r = r.Intersect(src.Bounds().Add(*sp))
 	dx := r.Min.X - orig.X
 	dy := r.Min.Y - orig.Y
 	if dx == 0 && dy == 0 {
@@ -245,10 +245,16 @@ func (q *MedianCutQuantizer) Quantize(dst *image.Paletted, r image.Rectangle, sr
 		dst.Palette = q.medianCut(points)
 	}
 
+	db := dst.Bounds()
+
 	for y := 0; y < r.Dy(); y++ {
+		dstY := db.Min.Y + sp.Y + y
+		srcY := r.Min.Y + y
 		for x := 0; x < r.Dx(); x++ {
 			// TODO: this should be done more efficiently.
-			dst.Set(sp.X+x, sp.Y+y, src.At(r.Min.X+x, r.Min.Y+y))
+			dstX := db.Min.X + sp.X + x
+			srcX := r.Min.X + x
+			dst.Set(dstX, dstY, src.At(srcX, srcY))
 		}
 	}
 }

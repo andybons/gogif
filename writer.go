@@ -189,7 +189,7 @@ func (e *encoder) writeColorTable(p color.Palette, size int) {
 	e.write(e.buf[:3*log2Lookup[size]])
 }
 
-func (e *encoder) writeImageBlock(pm *image.Paletted, delay int) {
+func (e *encoder) writeImageBlock(pm *image.Paletted, ff image.Point, delay int) {
 	if e.err != nil {
 		return
 	}
@@ -234,8 +234,8 @@ func (e *encoder) writeImageBlock(pm *image.Paletted, delay int) {
 		e.write(e.buf[:8])
 	}
 	e.buf[0] = sImageDescriptor
-	writeUint16(e.buf[1:3], uint16(b.Min.X))
-	writeUint16(e.buf[3:5], uint16(b.Min.Y))
+	writeUint16(e.buf[1:3], uint16(b.Min.X-ff.X)) // Bounds relative to first frame.
+	writeUint16(e.buf[3:5], uint16(b.Min.Y-ff.Y))
 	writeUint16(e.buf[5:7], uint16(b.Dx()))
 	writeUint16(e.buf[7:9], uint16(b.Dy()))
 	e.write(e.buf[:9])
@@ -293,8 +293,9 @@ func EncodeAll(w io.Writer, g *gif.GIF) error {
 	e := newEncoder(w)
 	e.g = g
 	e.writeHeader()
+	ff := g.Image[0].Bounds().Min
 	for i, pm := range g.Image {
-		e.writeImageBlock(pm, g.Delay[i])
+		e.writeImageBlock(pm, ff, g.Delay[i])
 	}
 	e.writeByte(sTrailer)
 	e.flush()
