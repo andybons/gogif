@@ -18,7 +18,6 @@ import (
 )
 
 func main() {
-	crop("shapes")
 	crop("blob")
 }
 
@@ -36,17 +35,21 @@ func crop(filename string) {
 	}
 
 	firstFrame := im.Image[0]
-	imgBounds := firstFrame.Bounds()
-	img := image.NewRGBA(imgBounds)
+	srcBounds := firstFrame.Bounds()
+
+	// Create a crop region for the bottom half of the image.
+	dstBounds := image.Rect(
+		srcBounds.Min.X,
+		srcBounds.Min.Y+srcBounds.Dy()/2,
+		srcBounds.Max.X,
+		srcBounds.Max.Y)
+
+	img := image.NewRGBA(srcBounds)
 
 	for index, frame := range im.Image {
 		bounds := frame.Bounds()
 		draw.Draw(img, bounds, frame, bounds.Min, draw.Src)
-		im.Image[index] = ImageToPaletted(img.SubImage(image.Rect(
-			imgBounds.Min.X,
-			imgBounds.Min.Y+imgBounds.Dy()/4,
-			imgBounds.Max.X,
-			imgBounds.Max.Y-imgBounds.Dy()/4)))
+		im.Image[index] = ImageToPaletted(img.SubImage(dstBounds))
 	}
 
 	out, err := os.Create(filename + ".out.gif")
